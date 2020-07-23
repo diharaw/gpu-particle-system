@@ -51,6 +51,13 @@ protected:
         // Create camera.
         create_camera();
 
+        glEnable(GL_MULTISAMPLE);
+
+        m_debug_draw.set_distance_fade(true);
+        m_debug_draw.set_depth_test(true);
+        m_debug_draw.set_fade_start(5.0f);
+        m_debug_draw.set_fade_end(10.0f);
+
         return true;
     }
 
@@ -65,6 +72,16 @@ protected:
         update_camera();
 
         update_uniforms();
+
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        render_particle();
+
+        m_debug_draw.grid(m_main_camera->m_view_projection, 1.0f, 10.0f);
+
+        m_debug_draw.render(nullptr, m_width, m_height, m_main_camera->m_view_projection, m_main_camera->m_position);
     }
 
     // -----------------------------------------------------------------------------------------------------------------------------------
@@ -160,6 +177,22 @@ private:
 
     void debug_gui()
     {
+        ImGui::InputFloat("Rotation", &m_rotation);
+        ImGui::InputFloat3("Position", &m_position.x);
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------------------------
+
+    void render_particle()
+    {
+        m_particle_program->use();
+
+        m_particle_program->set_uniform("u_Rotation", glm::radians(m_rotation));
+        m_particle_program->set_uniform("u_Position", m_position);
+        m_particle_program->set_uniform("u_View", m_main_camera->m_view);
+        m_particle_program->set_uniform("u_Proj", m_main_camera->m_projection);
+
+        glDrawArrays(GL_TRIANGLES, 0, 6);
     }
 
     // -----------------------------------------------------------------------------------------------------------------------------------
@@ -168,28 +201,26 @@ private:
     {
         {
             // Create general shaders
-            // m_cubemap_vs         = std::unique_ptr<dw::gl::Shader>(dw::gl::Shader::create_from_file(GL_VERTEX_SHADER, "shader/sky_vs.glsl"));
-            // m_cubemap_fs         = std::unique_ptr<dw::gl::Shader>(dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/sky_fs.glsl"));
+            m_particle_vs = std::unique_ptr<dw::gl::Shader>(dw::gl::Shader::create_from_file(GL_VERTEX_SHADER, "shader/particle_vs.glsl"));
+            m_particle_fs = std::unique_ptr<dw::gl::Shader>(dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/particle_fs.glsl"));
 
-            // {
-            //     if (!m_cubemap_vs || !m_cubemap_fs)
-            //     {
-            //         DW_LOG_FATAL("Failed to create Shaders");
-            //         return false;
-            //     }
+            {
+                if (!m_particle_vs || !m_particle_fs)
+                {
+                    DW_LOG_FATAL("Failed to create Shaders");
+                    return false;
+                }
 
-            //     // Create general shader program
-            //     dw::gl::Shader* shaders[] = { m_cubemap_vs.get(), m_cubemap_fs.get() };
-            //     m_cubemap_program         = std::make_unique<dw::gl::Program>(2, shaders);
+                // Create general shader program
+                dw::gl::Shader* shaders[] = { m_particle_vs.get(), m_particle_fs.get() };
+                m_particle_program        = std::make_unique<dw::gl::Program>(2, shaders);
 
-            //     if (!m_cubemap_program)
-            //     {
-            //         DW_LOG_FATAL("Failed to create Shader Program");
-            //         return false;
-            //     }
-
-            //     m_cubemap_program->uniform_block_binding("GlobalUniforms", 0);
-            // }
+                if (!m_particle_program)
+                {
+                    DW_LOG_FATAL("Failed to create Shader Program");
+                    return false;
+                }
+            }
         }
 
         return true;
@@ -267,6 +298,10 @@ private:
     // -----------------------------------------------------------------------------------------------------------------------------------
 
 private:
+    std::unique_ptr<dw::gl::Shader>  m_particle_vs;
+    std::unique_ptr<dw::gl::Shader>  m_particle_fs;
+    std::unique_ptr<dw::gl::Program> m_particle_program;
+
     std::unique_ptr<dw::gl::ShaderStorageBuffer> m_draw_indirect_args_ssbo;
     std::unique_ptr<dw::gl::ShaderStorageBuffer> m_dispatch_indirect_args_ssbo;
     std::unique_ptr<dw::gl::ShaderStorageBuffer> m_particle_data_ssbo;
@@ -296,15 +331,17 @@ private:
     float m_camera_y;
 
     // Particle settings
-    uint32_t m_max_active_particles = 0;    // Max Lifetime * Emission Rate
-    uint32_t m_emission_rate        = 0;    // Particles per second
-    float    m_min_lifetime         = 0.0f; // Seconds
-    float    m_max_lifetime         = 0.0f; // Seconds
-    float    m_min_velocity         = 0.0f;
-    float    m_max_velocity         = 0.0f;
-    bool     m_affected_by_gravity  = false;
-    PropertyChangeType m_color_mode = PROPERTY_CONSTANT;
-    PropertyChangeType m_scale_mode = PROPERTY_CONSTANT;
+    uint32_t           m_max_active_particles = 0;    // Max Lifetime * Emission Rate
+    uint32_t           m_emission_rate        = 0;    // Particles per second
+    float              m_min_lifetime         = 0.0f; // Seconds
+    float              m_max_lifetime         = 0.0f; // Seconds
+    float              m_min_velocity         = 0.0f;
+    float              m_max_velocity         = 0.0f;
+    bool               m_affected_by_gravity  = false;
+    PropertyChangeType m_color_mode           = PROPERTY_CONSTANT;
+    PropertyChangeType m_scale_mode           = PROPERTY_CONSTANT;
+    glm::vec3          m_position             = glm::vec3(0.0f);
+    float              m_rotation             = 0.0f;
 };
 
 DW_DECLARE_MAIN(GPUParticleSystem)
