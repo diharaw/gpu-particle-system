@@ -16,9 +16,29 @@ const vec3 PARTICLE_VERTICES[6] = vec3[](
 // ------------------------------------------------------------------
 
 uniform float u_Rotation;
-uniform vec3 u_Position;
 uniform mat4 u_View;
 uniform mat4 u_Proj;
+
+struct Particle
+{
+    vec2 lifetime;
+    vec3 velocity;
+    vec3 position;
+    vec4 color;
+};
+
+layout(std430, binding = 0) buffer ParticleData_t
+{
+    uint simulation_count;
+    uint emission_count;
+    Particle particles[];
+} ParticleData;
+
+layout(std430, binding = 1) buffer ParticleIndices_t
+{
+    uint count;
+    uint indices[];
+} AliveIndicesPostSim;
 
 // ------------------------------------------------------------------
 // MAIN -------------------------------------------------------------
@@ -34,7 +54,9 @@ void main()
 	
     quad_pos.xy = rot * quad_pos.xy;
 
-    vec4 position = u_View * vec4(u_Position, 1.0);
+    Particle particle = ParticleData.particles[AliveIndicesPostSim.indices[gl_InstanceID]];
+
+    vec4 position = u_View * vec4(particle.position, 1.0);
     position.xyz += quad_pos;
 
     gl_Position = u_Proj * position;

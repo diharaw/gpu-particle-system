@@ -12,9 +12,11 @@
 #include <random>
 
 #undef min
+#undef max
 #define CAMERA_FAR_PLANE 1000.0f
-#define MAX_PARTICLES 1000000
+#define MAX_PARTICLES 100
 #define GRADIENT_SAMPLES 32
+#define LOCAL_SIZE 32
 
 struct GlobalUniforms
 {
@@ -50,6 +52,7 @@ protected:
 
         // Create camera.
         create_camera();
+        particle_initialize();
 
         glEnable(GL_MULTISAMPLE);
 
@@ -71,12 +74,13 @@ protected:
         // Update camera.
         update_camera();
 
-        update_uniforms();
-
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+        particle_kickoff();
+        particle_emission();
+        particle_simulation();
         render_particle();
 
         m_debug_draw.grid(m_main_camera->m_view_projection, 1.0f, 10.0f);
@@ -185,14 +189,101 @@ private:
 
     void render_particle()
     {
+        glEnable(GL_DEPTH_TEST);
+
         m_particle_program->use();
 
         m_particle_program->set_uniform("u_Rotation", glm::radians(m_rotation));
-        m_particle_program->set_uniform("u_Position", m_position);
         m_particle_program->set_uniform("u_View", m_main_camera->m_view);
         m_particle_program->set_uniform("u_Proj", m_main_camera->m_projection);
 
-        glDrawArrays(GL_TRIANGLES, 0, 6);
+        m_particle_data_ssbo->bind_base(0);
+        m_alive_indices_post_sim_ssbo->bind_base(1);
+
+        glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_draw_indirect_args_ssbo->handle());
+
+        glDrawArraysIndirect(GL_TRIANGLES, 0);
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------------------------
+
+    void particle_initialize()
+    {
+        m_particle_initialize_program->use();
+
+        m_dead_indices_ssbo->bind_base(0);
+        m_alive_indices_pre_sim_ssbo->bind_base(1);
+        m_counters_ssbo->bind_base(2);
+
+        m_particle_initialize_program->set_uniform("u_MaxParticles", MAX_PARTICLES);
+
+        glDispatchCompute(MAX_PARTICLES / LOCAL_SIZE, 1, 1);
+
+        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------------------------
+
+    void particle_kickoff()
+    {
+        m_particle_update_kickoff_program->use();
+
+        int32_t rate = glm::max(1, int32_t(float(m_emission_rate) * float(m_delta_seconds)));
+        m_particle_update_kickoff_program->set_uniform("u_ParticlesPerFrame", rate);
+        
+        m_particle_data_ssbo->bind_base(0);
+        m_dispatch_emission_indirect_args_ssbo->bind_base(1);
+        m_dispatch_simulation_indirect_args_ssbo->bind_base(2);
+        m_draw_indirect_args_ssbo->bind_base(3);
+        m_counters_ssbo->bind_base(4);
+
+        glDispatchCompute(1, 1, 1);
+
+        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------------------------
+
+    void particle_emission()
+    {
+        m_particle_emission_program->use();
+
+        m_particle_emission_program->set_uniform("u_EmitterPosition", m_position);
+        m_particle_emission_program->set_uniform("u_EmitterVelocity", m_max_velocity);
+        m_particle_emission_program->set_uniform("u_EmitterLifetime", m_max_lifetime);
+
+        m_particle_data_ssbo->bind_base(0);
+        m_dead_indices_ssbo->bind_base(1);
+        m_alive_indices_pre_sim_ssbo->bind_base(2);
+        m_counters_ssbo->bind_base(3);
+
+        glBindBuffer(GL_DISPATCH_INDIRECT_BUFFER, m_dispatch_emission_indirect_args_ssbo->handle());
+
+        glDispatchComputeIndirect(0);
+
+        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------------------------
+
+    void particle_simulation()
+    {
+        m_particle_simulation_program->use();
+
+        m_particle_simulation_program->set_uniform("u_DeltaTime", float(m_delta_seconds));
+
+        m_particle_data_ssbo->bind_base(0);
+        m_dead_indices_ssbo->bind_base(1);
+        m_alive_indices_pre_sim_ssbo->bind_base(2);
+        m_alive_indices_post_sim_ssbo->bind_base(3);
+        m_draw_indirect_args_ssbo->bind_base(4);
+        m_counters_ssbo->bind_base(5);
+
+        glBindBuffer(GL_DISPATCH_INDIRECT_BUFFER, m_dispatch_simulation_indirect_args_ssbo->handle());
+
+        glDispatchComputeIndirect(0);
+
+        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
     }
 
     // -----------------------------------------------------------------------------------------------------------------------------------
@@ -201,8 +292,12 @@ private:
     {
         {
             // Create general shaders
-            m_particle_vs = std::unique_ptr<dw::gl::Shader>(dw::gl::Shader::create_from_file(GL_VERTEX_SHADER, "shader/particle_vs.glsl"));
-            m_particle_fs = std::unique_ptr<dw::gl::Shader>(dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/particle_fs.glsl"));
+            m_particle_vs                = std::unique_ptr<dw::gl::Shader>(dw::gl::Shader::create_from_file(GL_VERTEX_SHADER, "shader/particle_vs.glsl"));
+            m_particle_fs                = std::unique_ptr<dw::gl::Shader>(dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/particle_fs.glsl"));
+            m_particle_initialize_cs     = std::unique_ptr<dw::gl::Shader>(dw::gl::Shader::create_from_file(GL_COMPUTE_SHADER, "shader/particle_initialize_cs.glsl"));
+            m_particle_update_kickoff_cs = std::unique_ptr<dw::gl::Shader>(dw::gl::Shader::create_from_file(GL_COMPUTE_SHADER, "shader/particle_update_kickoff_cs.glsl"));
+            m_particle_emission_cs       = std::unique_ptr<dw::gl::Shader>(dw::gl::Shader::create_from_file(GL_COMPUTE_SHADER, "shader/particle_emission_cs.glsl"));
+            m_particle_simulation_cs     = std::unique_ptr<dw::gl::Shader>(dw::gl::Shader::create_from_file(GL_COMPUTE_SHADER, "shader/particle_simulation_cs.glsl"));
 
             {
                 if (!m_particle_vs || !m_particle_fs)
@@ -221,6 +316,78 @@ private:
                     return false;
                 }
             }
+
+            {
+                if (!m_particle_initialize_cs)
+                {
+                    DW_LOG_FATAL("Failed to create Shaders");
+                    return false;
+                }
+
+                // Create general shader program
+                dw::gl::Shader* shaders[]         = { m_particle_initialize_cs.get() };
+                m_particle_initialize_program = std::make_unique<dw::gl::Program>(1, shaders);
+
+                if (!m_particle_initialize_program)
+                {
+                    DW_LOG_FATAL("Failed to create Shader Program");
+                    return false;
+                }
+            }
+
+            {
+                if (!m_particle_update_kickoff_cs)
+                {
+                    DW_LOG_FATAL("Failed to create Shaders");
+                    return false;
+                }
+
+                // Create general shader program
+                dw::gl::Shader* shaders[]         = { m_particle_update_kickoff_cs.get() };
+                m_particle_update_kickoff_program = std::make_unique<dw::gl::Program>(1, shaders);
+
+                if (!m_particle_update_kickoff_program)
+                {
+                    DW_LOG_FATAL("Failed to create Shader Program");
+                    return false;
+                }
+            }
+
+            {
+                if (!m_particle_emission_cs)
+                {
+                    DW_LOG_FATAL("Failed to create Shaders");
+                    return false;
+                }
+
+                // Create general shader program
+                dw::gl::Shader* shaders[]   = { m_particle_emission_cs.get() };
+                m_particle_emission_program = std::make_unique<dw::gl::Program>(1, shaders);
+
+                if (!m_particle_emission_program)
+                {
+                    DW_LOG_FATAL("Failed to create Shader Program");
+                    return false;
+                }
+            }
+
+            {
+                if (!m_particle_simulation_cs)
+                {
+                    DW_LOG_FATAL("Failed to create Shaders");
+                    return false;
+                }
+
+                // Create general shader program
+                dw::gl::Shader* shaders[]     = { m_particle_simulation_cs.get() };
+                m_particle_simulation_program = std::make_unique<dw::gl::Program>(1, shaders);
+
+                if (!m_particle_simulation_program)
+                {
+                    DW_LOG_FATAL("Failed to create Shader Program");
+                    return false;
+                }
+            }
         }
 
         return true;
@@ -230,8 +397,22 @@ private:
 
     bool create_buffers()
     {
-        // Create uniform buffer for global data
-        m_global_ubo = std::make_unique<dw::gl::UniformBuffer>(GL_DYNAMIC_DRAW, sizeof(GlobalUniforms));
+        struct Particle
+        {
+            glm::vec4 lifetime;
+            glm::vec4 velocity;
+            glm::vec4 position;
+            glm::vec4 color;
+        };
+
+        m_draw_indirect_args_ssbo     = std::make_unique<dw::gl::ShaderStorageBuffer>(GL_STATIC_DRAW, sizeof(int32_t) * 4, nullptr);
+        m_dispatch_emission_indirect_args_ssbo = std::make_unique<dw::gl::ShaderStorageBuffer>(GL_STATIC_DRAW, sizeof(int32_t) * 3, nullptr);
+        m_dispatch_simulation_indirect_args_ssbo = std::make_unique<dw::gl::ShaderStorageBuffer>(GL_STATIC_DRAW, sizeof(int32_t) * 3, nullptr);
+        m_particle_data_ssbo          = std::make_unique<dw::gl::ShaderStorageBuffer>(GL_STATIC_DRAW, sizeof(Particle) * MAX_PARTICLES, nullptr);
+        m_alive_indices_pre_sim_ssbo  = std::make_unique<dw::gl::ShaderStorageBuffer>(GL_STATIC_DRAW, sizeof(int32_t) * MAX_PARTICLES, nullptr);
+        m_alive_indices_post_sim_ssbo = std::make_unique<dw::gl::ShaderStorageBuffer>(GL_STATIC_DRAW, sizeof(int32_t) * MAX_PARTICLES, nullptr);
+        m_dead_indices_ssbo           = std::make_unique<dw::gl::ShaderStorageBuffer>(GL_STATIC_DRAW, sizeof(int32_t) * MAX_PARTICLES, nullptr);
+        m_counters_ssbo                      = std::make_unique<dw::gl::ShaderStorageBuffer>(GL_STATIC_DRAW, sizeof(int32_t) * 5, nullptr);
 
         return true;
     }
@@ -243,15 +424,6 @@ private:
         m_main_camera = std::make_unique<dw::Camera>(60.0f, 0.1f, CAMERA_FAR_PLANE, float(m_width) / float(m_height), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(-1.0f, 0.0, 0.0f));
         m_main_camera->set_rotatation_delta(glm::vec3(0.0f, -90.0f, 0.0f));
         m_main_camera->update();
-    }
-
-    // -----------------------------------------------------------------------------------------------------------------------------------
-
-    void update_uniforms()
-    {
-        void* ptr = m_global_ubo->map(GL_WRITE_ONLY);
-        memcpy(ptr, &m_global_uniforms, sizeof(GlobalUniforms));
-        m_global_ubo->unmap();
     }
 
     // -----------------------------------------------------------------------------------------------------------------------------------
@@ -298,22 +470,32 @@ private:
     // -----------------------------------------------------------------------------------------------------------------------------------
 
 private:
-    std::unique_ptr<dw::gl::Shader>  m_particle_vs;
-    std::unique_ptr<dw::gl::Shader>  m_particle_fs;
+    std::unique_ptr<dw::gl::Shader> m_particle_vs;
+    std::unique_ptr<dw::gl::Shader> m_particle_fs;
+    std::unique_ptr<dw::gl::Shader> m_particle_initialize_cs;
+    std::unique_ptr<dw::gl::Shader> m_particle_update_kickoff_cs;
+    std::unique_ptr<dw::gl::Shader> m_particle_emission_cs;
+    std::unique_ptr<dw::gl::Shader> m_particle_simulation_cs;
+
     std::unique_ptr<dw::gl::Program> m_particle_program;
+    std::unique_ptr<dw::gl::Program> m_particle_initialize_program;
+    std::unique_ptr<dw::gl::Program> m_particle_update_kickoff_program;
+    std::unique_ptr<dw::gl::Program> m_particle_emission_program;
+    std::unique_ptr<dw::gl::Program> m_particle_simulation_program;
 
     std::unique_ptr<dw::gl::ShaderStorageBuffer> m_draw_indirect_args_ssbo;
-    std::unique_ptr<dw::gl::ShaderStorageBuffer> m_dispatch_indirect_args_ssbo;
+    std::unique_ptr<dw::gl::ShaderStorageBuffer> m_dispatch_emission_indirect_args_ssbo;
+    std::unique_ptr<dw::gl::ShaderStorageBuffer> m_dispatch_simulation_indirect_args_ssbo;
     std::unique_ptr<dw::gl::ShaderStorageBuffer> m_particle_data_ssbo;
     std::unique_ptr<dw::gl::ShaderStorageBuffer> m_alive_indices_pre_sim_ssbo;
     std::unique_ptr<dw::gl::ShaderStorageBuffer> m_alive_indices_post_sim_ssbo;
     std::unique_ptr<dw::gl::ShaderStorageBuffer> m_dead_indices_ssbo;
+    std::unique_ptr<dw::gl::ShaderStorageBuffer> m_counters_ssbo;
 
     std::unique_ptr<dw::gl::Texture1D> m_scale_over_time;
     std::unique_ptr<dw::gl::Texture1D> m_color_over_time;
 
-    std::unique_ptr<dw::gl::UniformBuffer> m_global_ubo;
-    std::unique_ptr<dw::Camera>            m_main_camera;
+    std::unique_ptr<dw::Camera> m_main_camera;
 
     GlobalUniforms m_global_uniforms;
 
@@ -332,11 +514,11 @@ private:
 
     // Particle settings
     uint32_t           m_max_active_particles = 0;    // Max Lifetime * Emission Rate
-    uint32_t           m_emission_rate        = 0;    // Particles per second
+    uint32_t           m_emission_rate        = 100;    // Particles per second
     float              m_min_lifetime         = 0.0f; // Seconds
-    float              m_max_lifetime         = 0.0f; // Seconds
-    float              m_min_velocity         = 0.0f;
-    float              m_max_velocity         = 0.0f;
+    float              m_max_lifetime         = 3.0f; // Seconds
+    glm::vec3              m_min_velocity         = glm::vec3(0.0f);
+    glm::vec3 m_max_velocity                   = glm::vec3(0.0f, 1.0f, 0.0f);
     bool               m_affected_by_gravity  = false;
     PropertyChangeType m_color_mode           = PROPERTY_CONSTANT;
     PropertyChangeType m_scale_mode           = PROPERTY_CONSTANT;

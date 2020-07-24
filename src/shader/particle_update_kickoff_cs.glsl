@@ -2,7 +2,7 @@
 // CONSTANTS ---------------------------------------------------------
 // ------------------------------------------------------------------
 
-#define LOCAL_SIZE 256
+#define LOCAL_SIZE 32
 
 // ------------------------------------------------------------------
 // INPUTS -----------------------------------------------------------
@@ -24,8 +24,6 @@ struct Particle
 
 layout(std430, binding = 0) buffer ParticleData_t
 {
-    uint simulation_count;
-    uint emission_count;
     Particle particles[];
 } ParticleData;
 
@@ -51,25 +49,16 @@ layout(std430, binding = 3) buffer ParticleDrawArgs_t
     uint base_instance;
 } ParticleDrawArgs;
 
-layout(std430, binding = 4) buffer ParticleIndices_t
+layout(std430, binding = 4) buffer ParticleCounters_t
 {
-    uint count;
-    uint indices[]
-} DeadIndices;
+    uint dead_count;
+    uint alive_pre_sim_count;
+    uint alive_post_sim_count;
+    uint simulation_count;
+    uint emission_count;
+} Counters;
 
-layout(std430, binding = 5) buffer ParticleIndices_t
-{
-    uint count;
-    uint indices[]
-} AliveIndicesPreSim;
-
-layout(std430, binding = 6) buffer ParticleIndices_t
-{
-    uint count;
-    uint indices[]
-} AliveIndicesPostSim;
-
-uniform uint u_ParticlesPerFrame;
+uniform int u_ParticlesPerFrame;
 
 // ------------------------------------------------------------------
 // MAIN -------------------------------------------------------------
@@ -78,22 +67,25 @@ uniform uint u_ParticlesPerFrame;
 void main()
 {
     // Reset particle indirect draw instance count
+    ParticleDrawArgs.count = 6;
     ParticleDrawArgs.instance_count = 0;
+    ParticleDrawArgs.first = 0;
+    ParticleDrawArgs.base_instance = 0;
 
     // We can't emit more particles than we have available
-    ParticleData.emission_count = min(u_ParticlesPerFrame, DeadIndices.count);
+    Counters.emission_count = min(uint(u_ParticlesPerFrame), Counters.dead_count);
 
-    EmissionDispatchArgs.local_size_x = ceil((float)ParticleData.emission_count / LOCAL_SIZE);
-    EmissionDispatchArgs.local_size_y = 1;
-    EmissionDispatchArgs.local_size_z = 1;
+    EmissionDispatchArgs.num_groups_x = uint(ceil(float(Counters.emission_count) / float(LOCAL_SIZE)));
+    EmissionDispatchArgs.num_groups_y = 1;
+    EmissionDispatchArgs.num_groups_z = 1;
 
     // Calculate total number of particles to simulate this frame
-    ParticleData.simulation_count = AliveIndicesPreSim.count + ParticleData.emission_count;
+    Counters.simulation_count = Counters.alive_pre_sim_count + Counters.emission_count;
 
-    SimulationDispatchArgs.local_size_x = ceil((float)ParticleData.simulation_count / LOCAL_SIZE);
-    SimulationDispatchArgs.local_size_y = 1;
-    SimulationDispatchArgs.local_size_z = 1;
+    SimulationDispatchArgs.num_groups_x = uint(ceil(float(Counters.simulation_count) / float(LOCAL_SIZE)));
+    SimulationDispatchArgs.num_groups_y = 1;
+    SimulationDispatchArgs.num_groups_z = 1;
 
     // Reset post simulation alive index count to 0
-    AliveIndicesPostSim.count = 0;
+    Counters.alive_post_sim_count = 0;
 }

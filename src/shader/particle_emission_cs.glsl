@@ -2,7 +2,7 @@
 // CONSTANTS ---------------------------------------------------------
 // ------------------------------------------------------------------
 
-#define LOCAL_SIZE 256
+#define LOCAL_SIZE 32
 
 // ------------------------------------------------------------------
 // INPUTS -----------------------------------------------------------
@@ -22,30 +22,33 @@ struct Particle
     vec4 color;
 };
 
-layout(std140) uniform EmitterData_t
-{
-    vec3 position;
-    float lifetime;
-} EmitterData;
+uniform vec3 u_EmitterPosition;
+uniform vec3 u_EmitterVelocity;
+uniform float u_EmitterLifetime;
 
 layout(std430, binding = 0) buffer ParticleData_t
 {
-    uint simulation_count;
-    uint emission_count;
     Particle particles[];
 } ParticleData;
 
-layout(std430, binding = 1) buffer ParticleIndices_t
+layout(std430, binding = 1) buffer ParticleDeadIndices_t
 {
-    uint count;
-    uint indices[]
+    uint indices[];
 } DeadIndices;
 
-layout(std430, binding = 2) buffer ParticleIndices_t
+layout(std430, binding = 2) buffer ParticleAlivePreSimIndices_t
 {
-    uint count;
-    uint indices[]
+    uint indices[];
 } AliveIndicesPreSim;
+
+layout(std430, binding = 3) buffer Counters_t
+{
+    uint dead_count;
+    uint alive_pre_sim_count;
+    uint alive_post_sim_count;
+    uint simulation_count;
+    uint emission_count;
+} Counters;
 
 // ------------------------------------------------------------------
 // FUNCTIONS --------------------------------------------------------
@@ -53,13 +56,13 @@ layout(std430, binding = 2) buffer ParticleIndices_t
 
 uint pop_dead_index()
 {
-    uint index = atomicAdd(DeadIndices.dead, -1);
+    uint index = atomicAdd(Counters.dead_count, -1);
     return DeadIndices.indices[index - 1];
 }
 
 void push_alive_index(uint index)
 {
-    uint insert_idx = atomicAdd(AliveIndicesPreSim.alive, 1);
+    uint insert_idx = atomicAdd(Counters.alive_pre_sim_count, 1);
     AliveIndicesPreSim.indices[insert_idx] = index;
 }
 
@@ -71,12 +74,13 @@ void main()
 {
     uint index = gl_GlobalInvocationID.x;
 
-    if (index < Counters.emission)
+    if (index < Counters.emission_count)
     {
         uint particle_index = pop_dead_index();
 
-        ParticleData.particles[particle_index].position = EmitterData.position;
-        ParticleData.particles[particle_index].lifetime = vec2(0.0, EmitterData.lifetime);
+        ParticleData.particles[particle_index].position.xyz = u_EmitterPosition;
+        ParticleData.particles[particle_index].velocity.xyz = u_EmitterVelocity;
+        ParticleData.particles[particle_index].lifetime.xy = vec2(0.0, u_EmitterLifetime);
 
         push_alive_index(particle_index);
     }
