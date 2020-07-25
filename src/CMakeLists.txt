@@ -5,7 +5,11 @@ find_program(CLANG_FORMAT_EXE NAMES "clang-format" DOC "Path to clang-format exe
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
 
-set(GPU_PARTICLE_SYSTEM_SOURCES ${PROJECT_SOURCE_DIR}/src/main.cpp)
+set(GPU_PARTICLE_SYSTEM_SOURCES ${PROJECT_SOURCE_DIR}/src/main.cpp
+                                ${PROJECT_SOURCE_DIR}/src/imgui_curve_editor.h
+                                ${PROJECT_SOURCE_DIR}/src/imgui_curve_editor.cpp
+                                ${PROJECT_SOURCE_DIR}/src/imgui_color_gradient.h
+                                ${PROJECT_SOURCE_DIR}/src/imgui_color_gradient.cpp)
 file(GLOB_RECURSE SHADER_SOURCES ${PROJECT_SOURCE_DIR}/src/*.glsl)
 
 if (APPLE)

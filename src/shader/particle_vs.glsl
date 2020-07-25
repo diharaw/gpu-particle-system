@@ -12,12 +12,21 @@ const vec3 PARTICLE_VERTICES[6] = vec3[](
 );
 
 // ------------------------------------------------------------------
+// OUTPUTS ----------------------------------------------------------
+// ------------------------------------------------------------------
+
+out vec4 FS_IN_Color;
+
+// ------------------------------------------------------------------
 // UNIFORMS ---------------------------------------------------------
 // ------------------------------------------------------------------
 
 uniform float u_Rotation;
 uniform mat4  u_View;
 uniform mat4  u_Proj;
+
+uniform sampler1D s_ColorOverTime;
+uniform sampler1D s_SizeOverTime;
 
 struct Particle
 {
@@ -46,6 +55,12 @@ AliveIndicesPostSim;
 
 void main()
 {
+    Particle particle = ParticleData.particles[AliveIndicesPostSim.indices[gl_InstanceID]];
+
+    float life  = particle.lifetime.x / particle.lifetime.y;
+    float size  = texture(s_SizeOverTime, life).x;
+    FS_IN_Color = texture(s_ColorOverTime, life);
+
     vec3 quad_pos = PARTICLE_VERTICES[gl_VertexID];
 
     // rotate the billboard:
@@ -53,7 +68,8 @@ void main()
 
     quad_pos.xy = rot * quad_pos.xy;
 
-    Particle particle = ParticleData.particles[AliveIndicesPostSim.indices[gl_InstanceID]];
+    // scale the quad
+    quad_pos.xy *= size;
 
     vec4 position = u_View * vec4(particle.position.xyz, 1.0);
     position.xyz += quad_pos;

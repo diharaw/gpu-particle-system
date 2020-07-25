@@ -10,6 +10,8 @@
 #include <random>
 #include <chrono>
 #include <random>
+#include "imgui_curve_editor.h"
+#include "imgui_color_gradient.h"
 
 #undef min
 #undef max
@@ -24,10 +26,17 @@ struct GlobalUniforms
     glm::mat4 view_proj;
 };
 
-enum EmitterShape
+enum EmissionShape
 {
-    EMITTER_SHAPE_SPHERE,
-    EMITTER_SHAPE_CONE
+    EMISSION_SHAPE_SPHERE,
+    EMISSION_SHAPE_BOX,
+    EMISSION_SHAPE_CONE
+};
+
+enum DirectionType
+{
+    DIRECTION_TYPE_SINGLE,
+    DIRECTION_TYPE_OUTWARDS
 };
 
 enum PropertyChangeType
@@ -47,8 +56,8 @@ protected:
         if (!create_shaders())
             return false;
 
-        if (!create_buffers())
-            return false;
+        create_buffers();
+        create_textures();
 
         // Create camera.
         create_camera();
@@ -61,6 +70,19 @@ protected:
         m_debug_draw.set_fade_start(5.0f);
         m_debug_draw.set_fade_end(10.0f);
 
+        m_color_gradient.getMarks().clear();
+        m_color_gradient.addMark(0.0f, ImColor(1.0f, 0.0f, 0.0f));
+        m_color_gradient.addMark(0.225f, ImColor(1.0f, 1.0f, 0.0f));
+        m_color_gradient.addMark(0.4f, ImColor(0.086f, 0.443f, 0.039f));
+        m_color_gradient.addMark(0.6f, ImColor(0.0f, 0.983f, 0.77f));
+        m_color_gradient.addMark(0.825f, ImColor(0.0f, 0.011f, 0.969f));
+        m_color_gradient.addMark(1.0f, ImColor(0.939f, 0.0f, 1.0f));
+
+        update_color_over_time_texture();
+        update_size_over_time_texture();
+
+        m_generator = std::mt19937(m_random());
+
         return true;
     }
 
@@ -69,6 +91,10 @@ protected:
     void update(double delta) override
     {
         m_accumulator += float(m_delta_seconds);
+
+        std::uniform_real_distribution<> distribution(1.0f, 10000.0f);
+
+        m_seeds = glm::vec3(distribution(m_generator), distribution(m_generator), distribution(m_generator));
 
         if (m_debug_gui)
             debug_gui();
@@ -186,13 +212,24 @@ private:
 
     void debug_gui()
     {
-        ImGui::InputFloat("Rotation", &m_rotation);
         ImGui::InputFloat3("Position", &m_position.x);
-        ImGui::SliderInt("Emission Rate (Particles/Second)", &m_emission_rate, 1, 100);
-        ImGui::SliderFloat3("Velocity", &m_max_velocity.x, 0.1f, 5.0f);
+        ImGui::InputInt("Emission Rate (Particles/Second)", &m_emission_rate);
+        ImGui::InputFloat("Min Lifetime", &m_min_lifetime);
+        ImGui::InputFloat("Max Lifetime", &m_max_lifetime);
+        ImGui::InputFloat("Min Initial Speed", &m_min_initial_speed);
+        ImGui::InputFloat("Max Initial Speed", &m_max_initial_speed);
 
-        std::string txt = "Particles Per Frame: " + std::to_string(m_particles_per_frame);
-        ImGui::Text(txt.c_str());
+        if (ImGui::InputFloat("Start Size", &m_start_size))
+            update_size_over_time_texture();
+
+        if (ImGui::InputFloat("End Size", &m_end_size))
+            update_size_over_time_texture();
+
+        if (ImGui::Bezier("Size Over Time", m_size_curve))
+            update_size_over_time_texture();
+
+        if (ImGui::GradientEditor("Color Over Time:", &m_color_gradient, m_dragging_mark, m_selected_mark))
+            update_color_over_time_texture();
     }
 
     // -----------------------------------------------------------------------------------------------------------------------------------
@@ -206,6 +243,12 @@ private:
         m_particle_program->set_uniform("u_Rotation", glm::radians(m_rotation));
         m_particle_program->set_uniform("u_View", m_main_camera->m_view);
         m_particle_program->set_uniform("u_Proj", m_main_camera->m_projection);
+
+        if (m_particle_program->set_uniform("s_ColorOverTime", 0))
+            m_color_over_time->bind(0);
+
+        if (m_particle_program->set_uniform("s_SizeOverTime", 1))
+            m_size_over_time->bind(1);
 
         m_particle_data_ssbo->bind_base(0);
         m_alive_indices_ssbo[m_post_sim_idx]->bind_base(1);
@@ -268,9 +311,16 @@ private:
     {
         m_particle_emission_program->use();
 
-        m_particle_emission_program->set_uniform("u_EmitterPosition", m_position);
-        m_particle_emission_program->set_uniform("u_EmitterVelocity", m_max_velocity);
-        m_particle_emission_program->set_uniform("u_EmitterLifetime", m_max_lifetime);
+        m_particle_emission_program->set_uniform("u_Seeds", m_seeds);
+        m_particle_emission_program->set_uniform("u_Position", m_position);
+        m_particle_emission_program->set_uniform("u_MinInitialSpeed", m_min_initial_speed);
+        m_particle_emission_program->set_uniform("u_MaxInitialSpeed", m_max_initial_speed);
+        m_particle_emission_program->set_uniform("u_MinLifetime", m_max_lifetime);
+        m_particle_emission_program->set_uniform("u_MaxLifetime", m_max_lifetime);
+        m_particle_emission_program->set_uniform("u_EmissionShape", int(m_emission_shape));
+        m_particle_emission_program->set_uniform("u_DirectionType", int(m_direction_type));
+        m_particle_emission_program->set_uniform("u_Direction", m_direction);
+        m_particle_emission_program->set_uniform("u_SphereRadius", m_sphere_radius);
         m_particle_emission_program->set_uniform("u_PreSimIdx", m_pre_sim_idx);
 
         m_particle_data_ssbo->bind_base(0);
@@ -442,6 +492,66 @@ private:
 
     // -----------------------------------------------------------------------------------------------------------------------------------
 
+    void create_textures()
+    {
+        m_color_over_time = std::make_unique<dw::gl::Texture1D>(GRADIENT_SAMPLES, 1, 1, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE);
+        m_size_over_time  = std::make_unique<dw::gl::Texture1D>(GRADIENT_SAMPLES, 1, 1, GL_R32F, GL_RED, GL_FLOAT);
+
+        m_color_over_time->set_min_filter(GL_NEAREST);
+        m_size_over_time->set_min_filter(GL_NEAREST);
+
+        m_color_over_time->set_wrapping(GL_CLAMP_TO_EDGE, GL_CLAMP_TO_EDGE, GL_CLAMP_TO_EDGE);
+        m_size_over_time->set_wrapping(GL_CLAMP_TO_EDGE, GL_CLAMP_TO_EDGE, GL_CLAMP_TO_EDGE);
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------------------------
+
+    void update_color_over_time_texture()
+    {
+        float delta = 1.0f / float(GRADIENT_SAMPLES);
+        float x     = 0.0f;
+
+        std::vector<uint8_t> samples;
+
+        for (uint32_t i = 0; i < GRADIENT_SAMPLES; i++)
+        {
+            glm::vec4 color;
+            m_color_gradient.getColorAt(x, &color.x);
+
+            samples.push_back(color.x * 255.0f);
+            samples.push_back(color.y * 255.0f);
+            samples.push_back(color.z * 255.0f);
+            samples.push_back(color.w * 255.0f);
+
+            x += delta;
+        }
+
+        m_color_over_time->set_data(0, 0, samples.data());
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------------------------
+
+    void update_size_over_time_texture()
+    {
+        float delta     = 1.0f / float(GRADIENT_SAMPLES);
+        float x         = 0.0f;
+        float size_diff = m_end_size - m_start_size;
+
+        std::vector<float> samples;
+
+        for (uint32_t i = 0; i < GRADIENT_SAMPLES; i++)
+        {
+            float size = m_start_size + ImGui::BezierValue(x, m_size_curve) * size_diff;
+            samples.push_back(size);
+
+            x += delta;
+        }
+
+        m_size_over_time->set_data(0, 0, samples.data());
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------------------------
+
     void create_camera()
     {
         m_main_camera = std::make_unique<dw::Camera>(60.0f, 0.1f, CAMERA_FAR_PLANE, float(m_width) / float(m_height), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(-1.0f, 0.0, 0.0f));
@@ -514,7 +624,7 @@ private:
     std::unique_ptr<dw::gl::ShaderStorageBuffer> m_dead_indices_ssbo;
     std::unique_ptr<dw::gl::ShaderStorageBuffer> m_counters_ssbo;
 
-    std::unique_ptr<dw::gl::Texture1D> m_scale_over_time;
+    std::unique_ptr<dw::gl::Texture1D> m_size_over_time;
     std::unique_ptr<dw::gl::Texture1D> m_color_over_time;
 
     std::unique_ptr<dw::Camera> m_main_camera;
@@ -535,22 +645,37 @@ private:
     float m_camera_y;
 
     // Particle settings
-    int32_t            m_max_active_particles = 0;    // Max Lifetime * Emission Rate
-    int32_t            m_emission_rate        = 100;  // Particles per second
-    float              m_min_lifetime         = 0.0f; // Seconds
-    float              m_max_lifetime         = 3.0f; // Seconds
-    glm::vec3          m_min_velocity         = glm::vec3(0.0f);
-    glm::vec3          m_max_velocity         = glm::vec3(0.0f, 2.0f, 0.0f);
-    bool               m_affected_by_gravity  = false;
-    PropertyChangeType m_color_mode           = PROPERTY_CONSTANT;
-    PropertyChangeType m_scale_mode           = PROPERTY_CONSTANT;
-    glm::vec3          m_position             = glm::vec3(0.0f);
-    float              m_rotation             = 0.0f;
-    int32_t            m_pre_sim_idx          = 0;
-    int32_t            m_post_sim_idx         = 1;
-    float              m_accumulator          = 0.0f;
-    float              m_emission_delta       = 0.0f;
-    int32_t            m_particles_per_frame  = 0;
+    int32_t       m_max_active_particles = 0;    // Max Lifetime * Emission Rate
+    int32_t       m_emission_rate        = 5000; // Particles per second
+    float         m_min_lifetime         = 0.0f; // Seconds
+    float         m_max_lifetime         = 3.0f; // Seconds
+    float         m_min_initial_speed    = 0.1f;
+    float         m_max_initial_speed    = 2.0f;
+    float         m_start_size           = 0.005f; // Seconds
+    float         m_end_size             = 0.001f; // Seconds
+    bool          m_affected_by_gravity  = false;
+    glm::vec3     m_position             = glm::vec3(0.0f);
+    glm::vec3     m_direction            = glm::vec3(0.0f, 1.0f, 0.0f);
+    float         m_rotation             = 0.0f;
+    int32_t       m_pre_sim_idx          = 0;
+    int32_t       m_post_sim_idx         = 1;
+    float         m_accumulator          = 0.0f;
+    float         m_emission_delta       = 0.0f;
+    int32_t       m_particles_per_frame  = 0;
+    EmissionShape m_emission_shape       = EMISSION_SHAPE_SPHERE;
+    DirectionType m_direction_type       = DIRECTION_TYPE_SINGLE;
+    float         m_sphere_radius        = 1.0f;
+
+    // Random
+    glm::vec3          m_seeds = glm::vec4(0.0f);
+    std::random_device m_random;
+    std::mt19937       m_generator;
+
+    // UI
+    ImGradient      m_color_gradient;
+    float           m_size_curve[5] = { 0.000f, 0.000f, 1.000f, 1.000f, 0.0f };
+    ImGradientMark* m_dragging_mark = nullptr;
+    ImGradientMark* m_selected_mark = nullptr;
 };
 
 DW_DECLARE_MAIN(GPUParticleSystem)
