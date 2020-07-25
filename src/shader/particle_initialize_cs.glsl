@@ -47,5 +47,6 @@ void main()
         Counters.alive_count[1] = 0;
     }
 
-    DeadIndices.indices[index] = index;
+    if (index < u_MaxParticles)
+        DeadIndices.indices[index] = index;
 }

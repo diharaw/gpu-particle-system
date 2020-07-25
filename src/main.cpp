@@ -14,7 +14,7 @@
 #undef min
 #undef max
 #define CAMERA_FAR_PLANE 1000.0f
-#define MAX_PARTICLES 128
+#define MAX_PARTICLES 1000000
 #define GRADIENT_SAMPLES 32
 #define LOCAL_SIZE 32
 
@@ -68,6 +68,8 @@ protected:
 
     void update(double delta) override
     {
+        m_accumulator += float(m_delta_seconds);
+
         if (m_debug_gui)
             debug_gui();
 
@@ -81,7 +83,7 @@ protected:
         particle_kickoff();
         particle_emission();
         particle_simulation();
-        render_particle();
+        render_particles();
 
         m_debug_draw.grid(m_main_camera->m_view_projection, 1.0f, 10.0f);
 
@@ -186,12 +188,16 @@ private:
     {
         ImGui::InputFloat("Rotation", &m_rotation);
         ImGui::InputFloat3("Position", &m_position.x);
+        ImGui::SliderInt("Emission Rate (Particles/Second)", &m_emission_rate, 1, 100);
         ImGui::SliderFloat3("Velocity", &m_max_velocity.x, 0.1f, 5.0f);
+
+        std::string txt = "Particles Per Frame: " + std::to_string(m_particles_per_frame);
+        ImGui::Text(txt.c_str());
     }
 
     // -----------------------------------------------------------------------------------------------------------------------------------
 
-    void render_particle()
+    void render_particles()
     {
         glEnable(GL_DEPTH_TEST);
 
@@ -220,7 +226,7 @@ private:
 
         m_particle_initialize_program->set_uniform("u_MaxParticles", MAX_PARTICLES);
 
-        glDispatchCompute(MAX_PARTICLES / LOCAL_SIZE, 1, 1);
+        glDispatchCompute(ceil(float(MAX_PARTICLES) / float(LOCAL_SIZE)), 1, 1);
 
         glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
     }
@@ -231,8 +237,17 @@ private:
     {
         m_particle_update_kickoff_program->use();
 
-        int32_t rate = glm::max(1, int32_t(float(m_emission_rate) * float(m_delta_seconds)));
-        m_particle_update_kickoff_program->set_uniform("u_ParticlesPerFrame", rate);
+        m_emission_delta = 1.0f / float(m_emission_rate); // In seconds
+
+        m_particles_per_frame = 0;
+
+        while (m_accumulator >= m_emission_delta)
+        {
+            m_accumulator -= m_emission_delta;
+            m_particles_per_frame++;
+        }
+
+        m_particle_update_kickoff_program->set_uniform("u_ParticlesPerFrame", m_particles_per_frame);
         m_particle_update_kickoff_program->set_uniform("u_PreSimIdx", m_pre_sim_idx);
         m_particle_update_kickoff_program->set_uniform("u_PostSimIdx", m_post_sim_idx);
 
@@ -520,8 +535,8 @@ private:
     float m_camera_y;
 
     // Particle settings
-    uint32_t           m_max_active_particles = 0;    // Max Lifetime * Emission Rate
-    uint32_t           m_emission_rate        = 100;  // Particles per second
+    int32_t            m_max_active_particles = 0;    // Max Lifetime * Emission Rate
+    int32_t            m_emission_rate        = 100;  // Particles per second
     float              m_min_lifetime         = 0.0f; // Seconds
     float              m_max_lifetime         = 3.0f; // Seconds
     glm::vec3          m_min_velocity         = glm::vec3(0.0f);
@@ -533,6 +548,9 @@ private:
     float              m_rotation             = 0.0f;
     int32_t            m_pre_sim_idx          = 0;
     int32_t            m_post_sim_idx         = 1;
+    float              m_accumulator          = 0.0f;
+    float              m_emission_delta       = 0.0f;
+    int32_t            m_particles_per_frame  = 0;
 };
 
 DW_DECLARE_MAIN(GPUParticleSystem)
