@@ -1,12 +1,17 @@
 # GPU Particle System
-GPU accelerated particle system using Compute shaders and Indirect rendering.
+An OpenGL GPU accelerated particle system using Compute shaders and Indirect rendering.
+
+## Screenshots
+
+![GPUParticleSystem](data/screenshot_1.JPG)
+![GPUParticleSystem](data/screenshot_2.JPG)
 
 ## Dependencies
 * [dwSampleFramework](https://github.com/diharaw/dwSampleFramework) 
 
 ## License
 ```
-Copyright (c) 2018 Dihara Wijetunga
+Copyright (c) 2020 Dihara Wijetunga
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and 
 associated documentation files (the "Software"), to deal in the Software without restriction, 

@@ -100,15 +100,15 @@ void main()
 
         if (u_EmissionShape == EMISSION_SHAPE_SPHERE)
             position += randomPointOnSphere(rand(u_Seeds.xyz / (index + 1)), rand(u_Seeds.yzx / (index + 1)), u_SphereRadius * rand(u_Seeds.zyx / (index + 1)));
-        else if (u_EmissionShape == EMISSION_SHAPE_SPHERE)
+        else if (u_EmissionShape == EMISSION_SHAPE_BOX)
             position += vec3(0.0);
-        else if (u_EmissionShape == EMISSION_SHAPE_SPHERE)
+        else if (u_EmissionShape == EMISSION_SHAPE_CONE)
             position += vec3(0.0);
 
         vec3 direction = u_Direction;
 
         if (u_DirectionType == DIRECTION_TYPE_OUTWARD)
-            direction = normalize(position);
+            direction = normalize(position - u_Position);
 
         float initial_speed = u_MinInitialSpeed + (u_MaxInitialSpeed - u_MinInitialSpeed) * rand(u_Seeds.xzy / (index + 1));
         float lifetime      = u_MinLifetime + (u_MaxLifetime - u_MinLifetime) * rand(u_Seeds.zyx / (index + 1));

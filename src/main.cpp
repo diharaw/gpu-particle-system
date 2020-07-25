@@ -94,7 +94,12 @@ protected:
 
         std::uniform_real_distribution<> distribution(1.0f, 10000.0f);
 
-        m_seeds = glm::vec3(distribution(m_generator), distribution(m_generator), distribution(m_generator));
+        m_seeds                = glm::vec3(distribution(m_generator), distribution(m_generator), distribution(m_generator));
+        m_viscosity            = 0.03f + (0.5f * sinf(glfwGetTime()) + 0.5f) * 25.0f;
+        m_constant_velocity.x  = (0.5f * sinf(glfwGetTime()) + 0.5f) * 5.0f;
+        m_constant_velocity.y  = (0.5f * cosf(glfwGetTime()) + 0.5f) * 10.0f;
+        m_constant_velocity.z  = (0.5f * sinf(glfwGetTime()) + 0.5f) * 5.0f;
+        m_max_active_particles = m_max_lifetime * m_emission_rate;
 
         if (m_debug_gui)
             debug_gui();
@@ -111,7 +116,8 @@ protected:
         particle_simulation();
         render_particles();
 
-        m_debug_draw.grid(m_main_camera->m_view_projection, 1.0f, 10.0f);
+        if (m_show_grid)
+            m_debug_draw.grid(m_main_camera->m_view_projection, 1.0f, 10.0f);
 
         m_debug_draw.render(nullptr, m_width, m_height, m_main_camera->m_view_projection, m_main_camera->m_position);
 
@@ -212,12 +218,18 @@ private:
 
     void debug_gui()
     {
+        std::string active_count = "Max Active Particles: " + std::to_string(m_max_active_particles);
+
+        ImGui::Text(active_count.c_str());
         ImGui::InputFloat3("Position", &m_position.x);
         ImGui::InputInt("Emission Rate (Particles/Second)", &m_emission_rate);
         ImGui::InputFloat("Min Lifetime", &m_min_lifetime);
         ImGui::InputFloat("Max Lifetime", &m_max_lifetime);
         ImGui::InputFloat("Min Initial Speed", &m_min_initial_speed);
         ImGui::InputFloat("Max Initial Speed", &m_max_initial_speed);
+        ImGui::InputFloat3("Constant Velocity", &m_constant_velocity.x);
+        ImGui::InputFloat("Viscosity", &m_viscosity);
+        ImGui::SliderFloat("Sphere Radius", &m_sphere_radius, 0.1f, 25.0f);
 
         if (ImGui::InputFloat("Start Size", &m_start_size))
             update_size_over_time_texture();
@@ -230,6 +242,8 @@ private:
 
         if (ImGui::GradientEditor("Color Over Time:", &m_color_gradient, m_dragging_mark, m_selected_mark))
             update_color_over_time_texture();
+
+        ImGui::Checkbox("Show Grid", &m_show_grid);
     }
 
     // -----------------------------------------------------------------------------------------------------------------------------------
@@ -342,8 +356,10 @@ private:
         m_particle_simulation_program->use();
 
         m_particle_simulation_program->set_uniform("u_DeltaTime", float(m_delta_seconds));
+        m_particle_simulation_program->set_uniform("u_Viscosity", m_viscosity);
         m_particle_simulation_program->set_uniform("u_PreSimIdx", m_pre_sim_idx);
         m_particle_simulation_program->set_uniform("u_PostSimIdx", m_post_sim_idx);
+        m_particle_simulation_program->set_uniform("u_ConstantVelocity", m_constant_velocity);
 
         m_particle_data_ssbo->bind_base(0);
         m_dead_indices_ssbo->bind_base(1);
@@ -632,39 +648,41 @@ private:
     GlobalUniforms m_global_uniforms;
 
     // Camera controls.
-    bool  m_visualize_displacement_map = false;
-    bool  m_debug_gui                  = true;
-    bool  m_mouse_look                 = false;
-    float m_heading_speed              = 0.0f;
-    float m_sideways_speed             = 0.0f;
-    float m_camera_sensitivity         = 0.05f;
-    float m_camera_speed               = 0.001f;
+    bool  m_debug_gui          = true;
+    bool  m_mouse_look         = false;
+    bool  m_show_grid          = true;
+    float m_heading_speed      = 0.0f;
+    float m_sideways_speed     = 0.0f;
+    float m_camera_sensitivity = 0.05f;
+    float m_camera_speed       = 0.05f;
 
     // Camera orientation.
     float m_camera_x;
     float m_camera_y;
 
     // Particle settings
-    int32_t       m_max_active_particles = 0;    // Max Lifetime * Emission Rate
-    int32_t       m_emission_rate        = 5000; // Particles per second
-    float         m_min_lifetime         = 0.0f; // Seconds
-    float         m_max_lifetime         = 3.0f; // Seconds
-    float         m_min_initial_speed    = 0.1f;
-    float         m_max_initial_speed    = 2.0f;
-    float         m_start_size           = 0.005f; // Seconds
-    float         m_end_size             = 0.001f; // Seconds
+    int32_t       m_max_active_particles = 0;      // Max Lifetime * Emission Rate
+    int32_t       m_emission_rate        = 100000; // Particles per second
+    float         m_min_lifetime         = 5.0f;   // Seconds
+    float         m_max_lifetime         = 10.0f;  // Seconds
+    float         m_min_initial_speed    = 3.0f;
+    float         m_max_initial_speed    = 4.0f;
+    float         m_start_size           = 0.02f; // Seconds
+    float         m_end_size             = 0.01f; // Seconds
     bool          m_affected_by_gravity  = false;
     glm::vec3     m_position             = glm::vec3(0.0f);
     glm::vec3     m_direction            = glm::vec3(0.0f, 1.0f, 0.0f);
+    glm::vec3     m_constant_velocity    = glm::vec3(0.0f);
     float         m_rotation             = 0.0f;
     int32_t       m_pre_sim_idx          = 0;
     int32_t       m_post_sim_idx         = 1;
     float         m_accumulator          = 0.0f;
     float         m_emission_delta       = 0.0f;
+    float         m_viscosity            = 0.3f;
     int32_t       m_particles_per_frame  = 0;
     EmissionShape m_emission_shape       = EMISSION_SHAPE_SPHERE;
     DirectionType m_direction_type       = DIRECTION_TYPE_SINGLE;
-    float         m_sphere_radius        = 1.0f;
+    float         m_sphere_radius        = 10.0f;
 
     // Random
     glm::vec3          m_seeds = glm::vec4(0.0f);

@@ -1,3 +1,5 @@
+#include <curl_noise.glsl>
+
 // ------------------------------------------------------------------
 // CONSTANTS ---------------------------------------------------------
 // ------------------------------------------------------------------
@@ -67,6 +69,8 @@ Counters;
 uniform float u_DeltaTime;
 uniform int   u_PreSimIdx;
 uniform int   u_PostSimIdx;
+uniform float u_Viscosity;
+uniform vec3  u_ConstantVelocity;
 
 // ------------------------------------------------------------------
 // FUNCTIONS --------------------------------------------------------
@@ -122,7 +126,10 @@ void main()
             // If still alive, increment lifetime and run simulation
             particle.lifetime.x += u_DeltaTime;
 
-            particle.position.xyz += particle.velocity.xyz * u_DeltaTime;
+            if (u_Viscosity != 0.0)
+                particle.velocity.xyz += (curl_noise(particle.position.xyz * u_DeltaTime) - particle.velocity.xyz) * u_Viscosity * u_DeltaTime;
+
+            particle.position.xyz += (particle.velocity.xyz + u_ConstantVelocity) * u_DeltaTime;
 
             ParticleData.particles[particle_index] = particle;
 
