@@ -8,7 +8,7 @@
 // INPUTS -----------------------------------------------------------
 // ------------------------------------------------------------------
 
-layout (local_size_x = LOCAL_SIZE, local_size_y = 1, local_size_z = 1) in;
+layout(local_size_x = LOCAL_SIZE, local_size_y = 1, local_size_z = 1) in;
 
 // ------------------------------------------------------------------
 // UNIFORMS ---------------------------------------------------------
@@ -17,21 +17,17 @@ layout (local_size_x = LOCAL_SIZE, local_size_y = 1, local_size_z = 1) in;
 layout(std430, binding = 0) buffer ParticleDeadIndices_t
 {
     uint indices[];
-} DeadIndices;
+}
+DeadIndices;
 
-layout(std430, binding = 1) buffer ParticleAlivePreSimIndices_t
-{
-    uint indices[];
-} AliveIndicesPreSim;
-
-layout(std430, binding = 2) buffer ParticleCounters_t
+layout(std430, binding = 1) buffer ParticleCounters_t
 {
     uint dead_count;
-    uint alive_pre_sim_count;
-    uint alive_post_sim_count;
+    uint alive_count[2];
     uint simulation_count;
     uint emission_count;
-} Counters;
+}
+Counters;
 
 uniform int u_MaxParticles;
 
@@ -46,8 +42,9 @@ void main()
     if (index == 0)
     {
         // Initialize counts
-        Counters.dead_count = u_MaxParticles - 1;
-        Counters.alive_pre_sim_count = 0;
+        Counters.dead_count     = u_MaxParticles;
+        Counters.alive_count[0] = 0;
+        Counters.alive_count[1] = 0;
     }
 
     DeadIndices.indices[index] = index;

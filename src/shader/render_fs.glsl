@@ -22,8 +22,8 @@ uniform sampler2D s_Image;
 
 void main()
 {
-    vec3 color = texture(s_Image, PS_IN_TexCoord).rgb;
-    color = pow(color, vec3(1.0/2.2));
+    vec3 color       = texture(s_Image, PS_IN_TexCoord).rgb;
+    color            = pow(color, vec3(1.0 / 2.2));
     PS_OUT_FragColor = vec4(color, 1.0);
 }
 

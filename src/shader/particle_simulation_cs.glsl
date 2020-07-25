@@ -8,7 +8,7 @@
 // INPUTS -----------------------------------------------------------
 // ------------------------------------------------------------------
 
-layout (local_size_x = LOCAL_SIZE, local_size_y = 1, local_size_z = 1) in;
+layout(local_size_x = LOCAL_SIZE, local_size_y = 1, local_size_z = 1) in;
 
 // ------------------------------------------------------------------
 // UNIFORMS ---------------------------------------------------------
@@ -25,22 +25,26 @@ struct Particle
 layout(std430, binding = 0) buffer ParticleData_t
 {
     Particle particles[];
-} ParticleData;
+}
+ParticleData;
 
 layout(std430, binding = 1) buffer ParticleDeadIndices_t
 {
     uint indices[];
-} DeadIndices;
+}
+DeadIndices;
 
 layout(std430, binding = 2) buffer ParticleAlivePreSimIndices_t
 {
     uint indices[];
-} AliveIndicesPreSim;
+}
+AliveIndicesPreSim;
 
 layout(std430, binding = 3) buffer ParticleAlivePostSimIndices_t
 {
     uint indices[];
-} AliveIndicesPostSim;
+}
+AliveIndicesPostSim;
 
 layout(std430, binding = 4) buffer ParticleDrawArgs_t
 {
@@ -48,18 +52,21 @@ layout(std430, binding = 4) buffer ParticleDrawArgs_t
     uint instance_count;
     uint first;
     uint base_instance;
-} ParticleDrawArgs;
+}
+ParticleDrawArgs;
 
 layout(std430, binding = 5) buffer ParticleCounters_t
 {
     uint dead_count;
-    uint alive_pre_sim_count;
-    uint alive_post_sim_count;
+    uint alive_count[2];
     uint simulation_count;
     uint emission_count;
-} Counters;
+}
+Counters;
 
 uniform float u_DeltaTime;
+uniform int   u_PreSimIdx;
+uniform int   u_PostSimIdx;
 
 // ------------------------------------------------------------------
 // FUNCTIONS --------------------------------------------------------
@@ -67,7 +74,7 @@ uniform float u_DeltaTime;
 
 void push_dead_index(uint index)
 {
-    uint insert_idx = atomicAdd(Counters.dead_count, 1);
+    uint insert_idx                 = atomicAdd(Counters.dead_count, 1);
     DeadIndices.indices[insert_idx] = index;
 }
 
@@ -79,13 +86,13 @@ uint pop_dead_index()
 
 void push_alive_index(uint index)
 {
-    uint insert_idx = atomicAdd(Counters.alive_post_sim_count, 1);
+    uint insert_idx                         = atomicAdd(Counters.alive_count[u_PostSimIdx], 1);
     AliveIndicesPostSim.indices[insert_idx] = index;
 }
 
 uint pop_alive_index()
 {
-    uint index = atomicAdd(Counters.alive_pre_sim_count, -1);
+    uint index = atomicAdd(Counters.alive_count[u_PreSimIdx], -1);
     return AliveIndicesPreSim.indices[index - 1];
 }
 
