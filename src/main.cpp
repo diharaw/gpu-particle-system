@@ -95,10 +95,6 @@ protected:
         std::uniform_real_distribution<> distribution(1.0f, 10000.0f);
 
         m_seeds                = glm::vec3(distribution(m_generator), distribution(m_generator), distribution(m_generator));
-        m_viscosity            = 0.03f + (0.5f * sinf(glfwGetTime()) + 0.5f) * 25.0f;
-        m_constant_velocity.x  = (0.5f * sinf(glfwGetTime()) + 0.5f) * 5.0f;
-        m_constant_velocity.y  = (0.5f * cosf(glfwGetTime()) + 0.5f) * 10.0f;
-        m_constant_velocity.z  = (0.5f * sinf(glfwGetTime()) + 0.5f) * 5.0f;
         m_max_active_particles = m_max_lifetime * m_emission_rate;
 
         if (m_debug_gui)
@@ -570,7 +566,7 @@ private:
 
     void create_camera()
     {
-        m_main_camera = std::make_unique<dw::Camera>(60.0f, 0.1f, CAMERA_FAR_PLANE, float(m_width) / float(m_height), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(-1.0f, 0.0, 0.0f));
+        m_main_camera = std::make_unique<dw::Camera>(60.0f, 0.1f, CAMERA_FAR_PLANE, float(m_width) / float(m_height), glm::vec3(10.0f, 5.0f, 5.0f), glm::vec3(-1.0f, 0.0, 0.0f));
         m_main_camera->set_rotatation_delta(glm::vec3(0.0f, -90.0f, 0.0f));
         m_main_camera->update();
     }
@@ -667,11 +663,11 @@ private:
     float         m_max_lifetime         = 10.0f;  // Seconds
     float         m_min_initial_speed    = 3.0f;
     float         m_max_initial_speed    = 4.0f;
-    float         m_start_size           = 0.02f; // Seconds
-    float         m_end_size             = 0.01f; // Seconds
+    float         m_start_size           = 0.005f; // Seconds
+    float         m_end_size             = 0.002f; // Seconds
     bool          m_affected_by_gravity  = false;
     glm::vec3     m_position             = glm::vec3(0.0f);
-    glm::vec3     m_direction            = glm::vec3(0.0f, 1.0f, 0.0f);
+    glm::vec3     m_direction            = glm::vec3(0.0f, 0.0f, 0.0f);
     glm::vec3     m_constant_velocity    = glm::vec3(0.0f);
     float         m_rotation             = 0.0f;
     int32_t       m_pre_sim_idx          = 0;
@@ -681,8 +677,8 @@ private:
     float         m_viscosity            = 0.3f;
     int32_t       m_particles_per_frame  = 0;
     EmissionShape m_emission_shape       = EMISSION_SHAPE_SPHERE;
-    DirectionType m_direction_type       = DIRECTION_TYPE_SINGLE;
-    float         m_sphere_radius        = 10.0f;
+    DirectionType m_direction_type       = DIRECTION_TYPE_OUTWARDS;
+    float         m_sphere_radius        = 0.1f;
 
     // Random
     glm::vec3          m_seeds = glm::vec4(0.0f);

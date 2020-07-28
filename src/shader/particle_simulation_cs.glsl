@@ -127,7 +127,7 @@ void main()
             particle.lifetime.x += u_DeltaTime;
 
             if (u_Viscosity != 0.0)
-                particle.velocity.xyz += (curl_noise(particle.position.xyz * u_DeltaTime) - particle.velocity.xyz) * u_Viscosity * u_DeltaTime;
+                particle.velocity.xyz += (curl_noise(particle.position.xyz) - particle.velocity.xyz) * u_Viscosity * u_DeltaTime;
 
             particle.position.xyz += (particle.velocity.xyz + u_ConstantVelocity) * u_DeltaTime;
 
