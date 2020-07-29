@@ -10,6 +10,8 @@
 #include <random>
 #include <chrono>
 #include <random>
+#include <bruneton_sky_model.h>
+#include <shadow_map.h>
 #include "imgui_curve_editor.h"
 #include "imgui_color_gradient.h"
 
@@ -56,6 +58,7 @@ protected:
         if (!create_shaders())
             return false;
 
+        load_mesh();
         create_buffers();
         create_textures();
 
@@ -83,6 +86,15 @@ protected:
 
         m_generator = std::mt19937(m_random());
 
+        m_sky_model.initialize();
+        m_shadow_map.initialize(1024);
+
+        m_sky_model.set_sun_angle(glm::radians(-30.0f));
+        m_shadow_map.set_direction(m_sky_model.direction());
+        m_shadow_map.set_extents(12.0f);
+
+        glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
+
         return true;
     }
 
@@ -103,14 +115,15 @@ protected:
         // Update camera.
         update_camera();
 
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
         particle_kickoff();
         particle_emission();
         particle_simulation();
-        render_particles();
+
+        m_sky_model.update_cubemap();
+        render_shadow_map();
+        render_lit_scene();
+
+        m_sky_model.render_skybox(0, 0, m_width, m_height, m_main_camera->m_view, m_main_camera->m_projection, nullptr);
 
         if (m_show_grid)
             m_debug_draw.grid(m_main_camera->m_view_projection, 1.0f, 10.0f);
@@ -119,6 +132,14 @@ protected:
 
         m_pre_sim_idx  = m_pre_sim_idx == 0 ? 1 : 0;
         m_post_sim_idx = m_post_sim_idx == 0 ? 1 : 0;
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------------------------
+
+    void shutdown() override
+    {
+        m_shadow_map.shutdown();
+        m_sky_model.shutdown();
     }
 
     // -----------------------------------------------------------------------------------------------------------------------------------
@@ -240,24 +261,29 @@ private:
             update_color_over_time_texture();
 
         ImGui::Checkbox("Show Grid", &m_show_grid);
+        float sun_angle = m_sky_model.sun_angle();
+        ImGui::SliderAngle("Sun Angle", &sun_angle, 0.0f, -180.0f);
+        m_sky_model.set_sun_angle(sun_angle);
+        m_shadow_map.set_direction(m_sky_model.direction());
+        ImGui::InputFloat("Shadow Bias", &m_shadow_bias);
     }
 
     // -----------------------------------------------------------------------------------------------------------------------------------
 
-    void render_particles()
+    void render_particles(std::unique_ptr<dw::gl::Program>& program, glm::mat4 view, glm::mat4 projection)
     {
         glEnable(GL_DEPTH_TEST);
 
-        m_particle_program->use();
+        program->use();
 
-        m_particle_program->set_uniform("u_Rotation", glm::radians(m_rotation));
-        m_particle_program->set_uniform("u_View", m_main_camera->m_view);
-        m_particle_program->set_uniform("u_Proj", m_main_camera->m_projection);
+        program->set_uniform("u_Rotation", glm::radians(m_rotation));
+        program->set_uniform("u_View", view);
+        program->set_uniform("u_Proj", projection);
 
-        if (m_particle_program->set_uniform("s_ColorOverTime", 0))
+        if (program->set_uniform("s_ColorOverTime", 0))
             m_color_over_time->bind(0);
 
-        if (m_particle_program->set_uniform("s_SizeOverTime", 1))
+        if (program->set_uniform("s_SizeOverTime", 1))
             m_size_over_time->bind(1);
 
         m_particle_data_ssbo->bind_base(0);
@@ -266,6 +292,74 @@ private:
         glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_draw_indirect_args_ssbo->handle());
 
         glDrawArraysIndirect(GL_TRIANGLES, 0);
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------------------------
+
+    void render_mesh(dw::Mesh* mesh, glm::mat4 model, std::unique_ptr<dw::gl::Program>& program)
+    {
+        program->set_uniform("u_Model", model);
+
+        // Bind vertex array.
+        mesh->mesh_vertex_array()->bind();
+
+        for (uint32_t i = 0; i < mesh->sub_mesh_count(); i++)
+        {
+            dw::SubMesh& submesh = mesh->sub_meshes()[i];
+
+            program->set_uniform("u_Color", glm::vec3(0.7f));
+            program->set_uniform("u_Direction", m_sky_model.direction());
+            program->set_uniform("u_LightColor", m_shadow_map.color());
+
+            // Issue draw call.
+            glDrawElementsBaseVertex(GL_TRIANGLES, submesh.index_count, GL_UNSIGNED_INT, (void*)(sizeof(unsigned int) * submesh.base_index), submesh.base_vertex);
+        }
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------------------------
+
+    void render_scene(std::unique_ptr<dw::gl::Program>& program)
+    {
+        // Bind shader program.
+        program->use();
+
+        program->set_uniform("u_LightViewProj", m_shadow_map.projection() * m_shadow_map.view());
+        program->set_uniform("u_ViewProj", m_main_camera->m_view_projection);
+        program->set_uniform("u_Bias", m_shadow_bias);
+
+        if (program->set_uniform("s_ShadowMap", 0))
+            m_shadow_map.texture()->bind(0);
+
+        // Draw scene.
+        render_mesh(m_playground.get(), glm::mat4(1.0f), program);
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------------------------
+
+    void render_lit_scene()
+    {
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glViewport(0, 0, m_width, m_height);
+
+        render_particles(m_particle_program, m_main_camera->m_view, m_main_camera->m_projection);
+        render_scene(m_mesh_lit_program);
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------------------------
+
+    void render_shadow_map()
+    {
+        m_shadow_map.begin_render();
+
+        render_particles(m_particle_depth_program, m_shadow_map.view(), m_shadow_map.projection());
+
+        m_mesh_depth_program->use();
+        m_mesh_depth_program->set_uniform("u_ViewProj", m_shadow_map.projection() * m_shadow_map.view());
+        render_mesh(m_playground.get(), glm::mat4(1.0f), m_mesh_depth_program);
+
+        m_shadow_map.end_render();
     }
 
     // -----------------------------------------------------------------------------------------------------------------------------------
@@ -373,6 +467,13 @@ private:
 
     // -----------------------------------------------------------------------------------------------------------------------------------
 
+    void load_mesh()
+    {
+        m_playground = dw::Mesh::load("Particle_Playground.obj");
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------------------------
+
     bool create_shaders()
     {
         {
@@ -383,6 +484,9 @@ private:
             m_particle_update_kickoff_cs = std::unique_ptr<dw::gl::Shader>(dw::gl::Shader::create_from_file(GL_COMPUTE_SHADER, "shader/particle_update_kickoff_cs.glsl"));
             m_particle_emission_cs       = std::unique_ptr<dw::gl::Shader>(dw::gl::Shader::create_from_file(GL_COMPUTE_SHADER, "shader/particle_emission_cs.glsl"));
             m_particle_simulation_cs     = std::unique_ptr<dw::gl::Shader>(dw::gl::Shader::create_from_file(GL_COMPUTE_SHADER, "shader/particle_simulation_cs.glsl"));
+            m_mesh_vs                    = std::unique_ptr<dw::gl::Shader>(dw::gl::Shader::create_from_file(GL_VERTEX_SHADER, "shader/mesh_vs.glsl"));
+            m_mesh_fs                    = std::unique_ptr<dw::gl::Shader>(dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/mesh_fs.glsl"));
+            m_depth_fs                   = std::unique_ptr<dw::gl::Shader>(dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/depth_fs.glsl"));
 
             {
                 if (!m_particle_vs || !m_particle_fs)
@@ -396,6 +500,60 @@ private:
                 m_particle_program        = std::make_unique<dw::gl::Program>(2, shaders);
 
                 if (!m_particle_program)
+                {
+                    DW_LOG_FATAL("Failed to create Shader Program");
+                    return false;
+                }
+            }
+
+            {
+                if (!m_particle_vs || !m_depth_fs)
+                {
+                    DW_LOG_FATAL("Failed to create Shaders");
+                    return false;
+                }
+
+                // Create general shader program
+                dw::gl::Shader* shaders[] = { m_particle_vs.get(), m_depth_fs.get() };
+                m_particle_depth_program  = std::make_unique<dw::gl::Program>(2, shaders);
+
+                if (!m_particle_depth_program)
+                {
+                    DW_LOG_FATAL("Failed to create Shader Program");
+                    return false;
+                }
+            }
+
+            {
+                if (!m_mesh_vs || !m_mesh_fs)
+                {
+                    DW_LOG_FATAL("Failed to create Shaders");
+                    return false;
+                }
+
+                // Create general shader program
+                dw::gl::Shader* shaders[] = { m_mesh_vs.get(), m_mesh_fs.get() };
+                m_mesh_lit_program        = std::make_unique<dw::gl::Program>(2, shaders);
+
+                if (!m_mesh_lit_program)
+                {
+                    DW_LOG_FATAL("Failed to create Shader Program");
+                    return false;
+                }
+            }
+
+            {
+                if (!m_mesh_vs || !m_depth_fs)
+                {
+                    DW_LOG_FATAL("Failed to create Shaders");
+                    return false;
+                }
+
+                // Create general shader program
+                dw::gl::Shader* shaders[] = { m_mesh_vs.get(), m_depth_fs.get() };
+                m_mesh_depth_program      = std::make_unique<dw::gl::Program>(2, shaders);
+
+                if (!m_mesh_depth_program)
                 {
                     DW_LOG_FATAL("Failed to create Shader Program");
                     return false;
@@ -621,12 +779,18 @@ private:
     std::unique_ptr<dw::gl::Shader> m_particle_update_kickoff_cs;
     std::unique_ptr<dw::gl::Shader> m_particle_emission_cs;
     std::unique_ptr<dw::gl::Shader> m_particle_simulation_cs;
+    std::unique_ptr<dw::gl::Shader> m_mesh_vs;
+    std::unique_ptr<dw::gl::Shader> m_mesh_fs;
+    std::unique_ptr<dw::gl::Shader> m_depth_fs;
 
     std::unique_ptr<dw::gl::Program> m_particle_program;
     std::unique_ptr<dw::gl::Program> m_particle_initialize_program;
     std::unique_ptr<dw::gl::Program> m_particle_update_kickoff_program;
     std::unique_ptr<dw::gl::Program> m_particle_emission_program;
     std::unique_ptr<dw::gl::Program> m_particle_simulation_program;
+    std::unique_ptr<dw::gl::Program> m_mesh_lit_program;
+    std::unique_ptr<dw::gl::Program> m_mesh_depth_program;
+    std::unique_ptr<dw::gl::Program> m_particle_depth_program;
 
     std::unique_ptr<dw::gl::ShaderStorageBuffer> m_draw_indirect_args_ssbo;
     std::unique_ptr<dw::gl::ShaderStorageBuffer> m_dispatch_emission_indirect_args_ssbo;
@@ -641,6 +805,10 @@ private:
 
     std::unique_ptr<dw::Camera> m_main_camera;
 
+    dw::BrunetonSkyModel m_sky_model;
+    dw::ShadowMap        m_shadow_map;
+    dw::Mesh::Ptr        m_playground;
+
     GlobalUniforms m_global_uniforms;
 
     // Camera controls.
@@ -650,7 +818,7 @@ private:
     float m_heading_speed      = 0.0f;
     float m_sideways_speed     = 0.0f;
     float m_camera_sensitivity = 0.05f;
-    float m_camera_speed       = 0.05f;
+    float m_camera_speed       = 0.005f;
 
     // Camera orientation.
     float m_camera_x;
@@ -667,7 +835,7 @@ private:
     float         m_end_size             = 0.002f; // Seconds
     bool          m_affected_by_gravity  = false;
     glm::vec3     m_position             = glm::vec3(0.0f);
-    glm::vec3     m_direction            = glm::vec3(0.0f, 0.0f, 0.0f);
+    glm::vec3     m_direction            = glm::vec3(0.0f, 1.0f, 0.0f);
     glm::vec3     m_constant_velocity    = glm::vec3(0.0f);
     float         m_rotation             = 0.0f;
     int32_t       m_pre_sim_idx          = 0;
@@ -677,8 +845,9 @@ private:
     float         m_viscosity            = 0.3f;
     int32_t       m_particles_per_frame  = 0;
     EmissionShape m_emission_shape       = EMISSION_SHAPE_SPHERE;
-    DirectionType m_direction_type       = DIRECTION_TYPE_OUTWARDS;
+    DirectionType m_direction_type       = DIRECTION_TYPE_SINGLE;
     float         m_sphere_radius        = 0.1f;
+    float         m_shadow_bias          = 0.00001f;
 
     // Random
     glm::vec3          m_seeds = glm::vec4(0.0f);
