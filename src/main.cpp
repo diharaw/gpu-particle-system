@@ -61,6 +61,7 @@ protected:
         load_mesh();
         create_buffers();
         create_textures();
+        create_framebuffers();
 
         // Create camera.
         create_camera();
@@ -87,7 +88,7 @@ protected:
         m_generator = std::mt19937(m_random());
 
         m_sky_model.initialize();
-        m_shadow_map.initialize(1024);
+        m_shadow_map.initialize(2048);
 
         m_sky_model.set_sun_angle(glm::radians(-30.0f));
         m_shadow_map.set_direction(m_sky_model.direction());
@@ -114,6 +115,8 @@ protected:
 
         // Update camera.
         update_camera();
+
+        render_depth_prepass();
 
         particle_kickoff();
         particle_emission();
@@ -246,6 +249,10 @@ private:
         ImGui::InputFloat("Max Initial Speed", &m_max_initial_speed);
         ImGui::InputFloat3("Constant Velocity", &m_constant_velocity.x);
         ImGui::InputFloat("Viscosity", &m_viscosity);
+        ImGui::Checkbox("Affected by Gravity", &m_affected_by_gravity);
+        ImGui::Checkbox("Depth Buffer Collision", &m_depth_buffer_collision);
+        if (m_depth_buffer_collision)
+            ImGui::SliderFloat("Restitution", &m_restitution, 0.0f, 1.0f);
         ImGui::SliderFloat("Sphere Radius", &m_sphere_radius, 0.1f, 25.0f);
 
         if (ImGui::InputFloat("Start Size", &m_start_size))
@@ -364,6 +371,18 @@ private:
 
     // -----------------------------------------------------------------------------------------------------------------------------------
 
+    void render_depth_prepass()
+    {
+        m_scene_depth_fbo->bind();
+        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glViewport(0, 0, m_width, m_height);
+
+        render_scene(m_depth_prepass_program);
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------------------------
+
     void particle_initialize()
     {
         m_particle_initialize_program->use();
@@ -450,6 +469,16 @@ private:
         m_particle_simulation_program->set_uniform("u_PreSimIdx", m_pre_sim_idx);
         m_particle_simulation_program->set_uniform("u_PostSimIdx", m_post_sim_idx);
         m_particle_simulation_program->set_uniform("u_ConstantVelocity", m_constant_velocity);
+        m_particle_simulation_program->set_uniform("u_AffectedByGravity", (int)m_affected_by_gravity);
+        m_particle_simulation_program->set_uniform("u_DepthBufferCollision", (int)m_depth_buffer_collision);
+        m_particle_simulation_program->set_uniform("u_Restitution", m_restitution);
+        m_particle_simulation_program->set_uniform("u_ViewProj", m_main_camera->m_view_projection);
+
+        if (m_particle_simulation_program->set_uniform("s_Depth", 0))
+            m_scene_depth_rt->bind(0);
+
+        if (m_particle_simulation_program->set_uniform("s_Normals", 1))
+            m_scene_normals_rt->bind(1);
 
         m_particle_data_ssbo->bind_base(0);
         m_dead_indices_ssbo->bind_base(1);
@@ -487,6 +516,7 @@ private:
             m_mesh_vs                    = std::unique_ptr<dw::gl::Shader>(dw::gl::Shader::create_from_file(GL_VERTEX_SHADER, "shader/mesh_vs.glsl"));
             m_mesh_fs                    = std::unique_ptr<dw::gl::Shader>(dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/mesh_fs.glsl"));
             m_depth_fs                   = std::unique_ptr<dw::gl::Shader>(dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/depth_fs.glsl"));
+            m_depth_prepass_fs                   = std::unique_ptr<dw::gl::Shader>(dw::gl::Shader::create_from_file(GL_FRAGMENT_SHADER, "shader/depth_prepass_fs.glsl"));
 
             {
                 if (!m_particle_vs || !m_particle_fs)
@@ -536,6 +566,24 @@ private:
                 m_mesh_lit_program        = std::make_unique<dw::gl::Program>(2, shaders);
 
                 if (!m_mesh_lit_program)
+                {
+                    DW_LOG_FATAL("Failed to create Shader Program");
+                    return false;
+                }
+            }
+
+            {
+                if (!m_mesh_vs || !m_depth_prepass_fs)
+                {
+                    DW_LOG_FATAL("Failed to create Shaders");
+                    return false;
+                }
+
+                // Create general shader program
+                dw::gl::Shader* shaders[] = { m_mesh_vs.get(), m_depth_prepass_fs.get() };
+                m_depth_prepass_program        = std::make_unique<dw::gl::Program>(2, shaders);
+
+                if (!m_depth_prepass_program)
                 {
                     DW_LOG_FATAL("Failed to create Shader Program");
                     return false;
@@ -662,6 +710,18 @@ private:
 
     // -----------------------------------------------------------------------------------------------------------------------------------
 
+    void create_framebuffers()
+    {
+        m_scene_depth_rt = std::make_unique<dw::gl::Texture2D>(m_width, m_height, 1, 1, 1, GL_DEPTH_COMPONENT32F, GL_DEPTH_COMPONENT, GL_FLOAT);
+        m_scene_normals_rt = std::make_unique<dw::gl::Texture2D>(m_width, m_height, 1, 1, 1, GL_RGB32F, GL_RGB, GL_FLOAT);
+
+        m_scene_depth_fbo = std::make_unique<dw::gl::Framebuffer>();
+        m_scene_depth_fbo->attach_render_target(0, m_scene_normals_rt.get(), 0, 0);
+        m_scene_depth_fbo->attach_depth_stencil_target(m_scene_depth_rt.get(), 0, 0);
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------------------------
+
     void create_textures()
     {
         m_color_over_time = std::make_unique<dw::gl::Texture1D>(GRADIENT_SAMPLES, 1, 1, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE);
@@ -782,6 +842,7 @@ private:
     std::unique_ptr<dw::gl::Shader> m_mesh_vs;
     std::unique_ptr<dw::gl::Shader> m_mesh_fs;
     std::unique_ptr<dw::gl::Shader> m_depth_fs;
+    std::unique_ptr<dw::gl::Shader> m_depth_prepass_fs;
 
     std::unique_ptr<dw::gl::Program> m_particle_program;
     std::unique_ptr<dw::gl::Program> m_particle_initialize_program;
@@ -791,6 +852,7 @@ private:
     std::unique_ptr<dw::gl::Program> m_mesh_lit_program;
     std::unique_ptr<dw::gl::Program> m_mesh_depth_program;
     std::unique_ptr<dw::gl::Program> m_particle_depth_program;
+    std::unique_ptr<dw::gl::Program> m_depth_prepass_program;
 
     std::unique_ptr<dw::gl::ShaderStorageBuffer> m_draw_indirect_args_ssbo;
     std::unique_ptr<dw::gl::ShaderStorageBuffer> m_dispatch_emission_indirect_args_ssbo;
@@ -799,6 +861,10 @@ private:
     std::unique_ptr<dw::gl::ShaderStorageBuffer> m_alive_indices_ssbo[2];
     std::unique_ptr<dw::gl::ShaderStorageBuffer> m_dead_indices_ssbo;
     std::unique_ptr<dw::gl::ShaderStorageBuffer> m_counters_ssbo;
+
+    std::unique_ptr<dw::gl::Texture2D>   m_scene_depth_rt;
+    std::unique_ptr<dw::gl::Texture2D>   m_scene_normals_rt;
+    std::unique_ptr<dw::gl::Framebuffer> m_scene_depth_fbo;
 
     std::unique_ptr<dw::gl::Texture1D> m_size_over_time;
     std::unique_ptr<dw::gl::Texture1D> m_color_over_time;
@@ -826,15 +892,16 @@ private:
 
     // Particle settings
     int32_t       m_max_active_particles = 0;      // Max Lifetime * Emission Rate
-    int32_t       m_emission_rate        = 100000; // Particles per second
-    float         m_min_lifetime         = 5.0f;   // Seconds
-    float         m_max_lifetime         = 10.0f;  // Seconds
-    float         m_min_initial_speed    = 3.0f;
+    int32_t       m_emission_rate        = 500; // Particles per second
+    float         m_min_lifetime         = 2.0f;   // Seconds
+    float         m_max_lifetime         = 2.5f;  // Seconds
+    float         m_min_initial_speed    = 1.0f;
     float         m_max_initial_speed    = 4.0f;
-    float         m_start_size           = 0.005f; // Seconds
-    float         m_end_size             = 0.002f; // Seconds
-    bool          m_affected_by_gravity  = false;
-    glm::vec3     m_position             = glm::vec3(0.0f);
+    float         m_start_size           = 0.01f; // Seconds
+    float         m_end_size             = 0.005f; // Seconds
+    bool          m_affected_by_gravity  = true;
+    bool          m_depth_buffer_collision = true;
+    glm::vec3     m_position             = glm::vec3(0.0f, 3.0f, 0.0f);
     glm::vec3     m_direction            = glm::vec3(0.0f, 1.0f, 0.0f);
     glm::vec3     m_constant_velocity    = glm::vec3(0.0f);
     float         m_rotation             = 0.0f;
@@ -842,10 +909,11 @@ private:
     int32_t       m_post_sim_idx         = 1;
     float         m_accumulator          = 0.0f;
     float         m_emission_delta       = 0.0f;
-    float         m_viscosity            = 0.3f;
+    float         m_viscosity            = 0.0f;
+    float         m_restitution            = 0.5f;
     int32_t       m_particles_per_frame  = 0;
     EmissionShape m_emission_shape       = EMISSION_SHAPE_SPHERE;
-    DirectionType m_direction_type       = DIRECTION_TYPE_SINGLE;
+    DirectionType m_direction_type       = DIRECTION_TYPE_OUTWARDS;
     float         m_sphere_radius        = 0.1f;
     float         m_shadow_bias          = 0.00001f;
 
