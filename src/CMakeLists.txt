@@ -10,6 +10,9 @@ set(GPU_PARTICLE_SYSTEM_SOURCES ${PROJECT_SOURCE_DIR}/src/main.cpp
                                 ${PROJECT_SOURCE_DIR}/src/imgui_curve_editor.cpp
                                 ${PROJECT_SOURCE_DIR}/src/imgui_color_gradient.h
                                 ${PROJECT_SOURCE_DIR}/src/imgui_color_gradient.cpp
+                                ${PROJECT_SOURCE_DIR}/external/ImGuizmo/ImGuizmo.h
+                                ${PROJECT_SOURCE_DIR}/external/ImGuizmo/ImGuizmo.cpp
+                                ${PROJECT_SOURCE_DIR}/external/dwSampleFramework/extras/shadow_map.cpp
                                 ${PROJECT_SOURCE_DIR}/external/dwSampleFramework/extras/shadow_map.h
                                 ${PROJECT_SOURCE_DIR}/external/dwSampleFramework/extras/shadow_map.cpp
                                 ${PROJECT_SOURCE_DIR}/external/dwSampleFramework/extras/bruneton_sky_model.h
